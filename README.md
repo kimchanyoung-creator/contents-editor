@@ -1,5 +1,7 @@
 # AI 자동 비디오 편집기
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kimchanyoung-creator/contents-editor/blob/main/auto_video_editor.ipynb)
+
 이미지, 영상, 음악을 업로드하면 자동으로 분석하여 뮤직비디오/영화 스타일의 결과물을 생성하는 Google Colab 기반 자동 편집 프로그램입니다.
 
 ## 주요 기능
@@ -47,7 +49,17 @@
 
 ### 1. Google Colab에서 열기
 
-`auto_video_editor.ipynb` 파일을 Google Colab에서 엽니다.
+**방법 A**: 위의 "Open in Colab" 배지 클릭
+
+**방법 B**: 직접 링크 접속
+```
+https://colab.research.google.com/github/kimchanyoung-creator/contents-editor/blob/main/auto_video_editor.ipynb
+```
+
+**방법 C**: 수동 업로드
+1. GitHub에서 `auto_video_editor.ipynb` 파일 다운로드
+2. [Google Colab](https://colab.research.google.com) 접속
+3. 파일 → 노트 업로드 → 다운받은 파일 선택
 
 ### 2. 라이브러리 설치
 
