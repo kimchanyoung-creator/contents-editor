@@ -1,4 +1,4 @@
-#@title 🎬 AI 자동 비디오 편집기 - Google Colab용
+#@title 🎬 AI 자동 비디오 편집기 v2.0 - Google Colab용
 #@markdown ### 사용법: 이 전체 코드를 Colab 셀에 붙여넣고 실행하세요!
 
 # ============================================================
@@ -7,7 +7,7 @@
 print("📦 라이브러리 설치 중...")
 import subprocess
 subprocess.run(['pip', 'install', '-q', 'moviepy==1.0.3', 'librosa', 'opencv-python-headless', 'mediapipe', 'pillow', 'scipy'])
-subprocess.run(['apt-get', 'install', '-y', '-qq', 'ffmpeg'])
+subprocess.run(['apt-get', 'install', '-y', '-qq', 'ffmpeg'], capture_output=True)
 print("✅ 설치 완료!")
 
 # ============================================================
@@ -21,8 +21,8 @@ import mediapipe as mp
 from PIL import Image
 from google.colab import files
 from moviepy.editor import (
-    VideoFileClip, ImageClip, AudioFileClip, CompositeVideoClip,
-    concatenate_videoclips, vfx
+    VideoFileClip, ImageClip, AudioFileClip, ColorClip,
+    CompositeVideoClip, concatenate_videoclips, vfx
 )
 from scipy.signal import find_peaks
 import random
@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict
 from enum import Enum
 import warnings
+import time
 warnings.filterwarnings('ignore')
 
 print("✅ 라이브러리 로드 완료!")
@@ -38,15 +39,36 @@ print("✅ 라이브러리 로드 완료!")
 # 3. 설정값
 # ============================================================
 class Config:
+    # 가로형 (16:9)
+    HORIZONTAL_WIDTH = 1920
+    HORIZONTAL_HEIGHT = 1080
+    # 세로형 (9:16)
+    VERTICAL_WIDTH = 1080
+    VERTICAL_HEIGHT = 1920
+
+    # 현재 설정 (기본값: 가로형)
     OUTPUT_WIDTH = 1920
     OUTPUT_HEIGHT = 1080
     OUTPUT_FPS = 30
+
     MIN_CLIP_DURATION = 1.5
     MAX_CLIP_DURATION = 8.0
     DEFAULT_IMAGE_DURATION = 4.0
     TRANSITION_DURATION = 0.5
     ZOOM_INTENSITY = 1.3
     FACE_ZOOM_INTENSITY = 1.5
+
+    @classmethod
+    def set_horizontal(cls):
+        cls.OUTPUT_WIDTH = cls.HORIZONTAL_WIDTH
+        cls.OUTPUT_HEIGHT = cls.HORIZONTAL_HEIGHT
+        print(f"📐 출력 형식: 가로형 (1920x1080)")
+
+    @classmethod
+    def set_vertical(cls):
+        cls.OUTPUT_WIDTH = cls.VERTICAL_WIDTH
+        cls.OUTPUT_HEIGHT = cls.VERTICAL_HEIGHT
+        print(f"📐 출력 형식: 세로형 (1080x1920)")
 
 # ============================================================
 # 4. 카메라 기법 & 트랜지션 정의
@@ -104,6 +126,8 @@ class FaceDetector:
         self.detector = self.mp_face.FaceDetection(model_selection=1, min_detection_confidence=0.5)
 
     def detect(self, image):
+        if image is None:
+            return []
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         results = self.detector.process(rgb)
         faces = []
@@ -139,7 +163,7 @@ def analyze_music(audio_path):
 
     tempo_val = float(tempo[0]) if hasattr(tempo, '__iter__') else float(tempo)
 
-    print(f"  템포: {tempo_val:.1f} BPM | 비트: {len(beat_times)}개 | 강한비트: {len(strong_beats)}개")
+    print(f"  ✓ 템포: {tempo_val:.1f} BPM | 비트: {len(beat_times)}개 | 강한비트: {len(strong_beats)}개")
     return BeatInfo(beat_times, tempo_val, strong_beats, duration)
 
 # ============================================================
@@ -148,17 +172,23 @@ def analyze_music(audio_path):
 def analyze_media(filepath):
     ext = os.path.splitext(filepath)[1].lower()
 
-    if ext in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']:
-        print(f"🖼️ 이미지 분석: {os.path.basename(filepath)}")
+    if ext in ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif']:
+        print(f"🖼️ 이미지: {os.path.basename(filepath)}", end=" ")
         img = cv2.imread(filepath)
+        if img is None:
+            print("(읽기 실패)")
+            return None
         h, w = img.shape[:2]
         faces = face_detector.detect(img)
-        print(f"  크기: {w}x{h} | 얼굴: {len(faces)}개")
+        print(f"({w}x{h}, 얼굴 {len(faces)}개)")
         return MediaInfo(filepath, 'image', Config.DEFAULT_IMAGE_DURATION, w, h, faces)
 
-    elif ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
-        print(f"🎬 비디오 분석: {os.path.basename(filepath)}")
+    elif ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v']:
+        print(f"🎬 비디오: {os.path.basename(filepath)}", end=" ")
         cap = cv2.VideoCapture(filepath)
+        if not cap.isOpened():
+            print("(읽기 실패)")
+            return None
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -167,10 +197,11 @@ def analyze_media(filepath):
         ret, frame = cap.read()
         faces = face_detector.detect(frame) if ret else []
         cap.release()
-        print(f"  크기: {w}x{h} | 길이: {duration:.1f}초 | 얼굴: {len(faces)}개")
+        print(f"({w}x{h}, {duration:.1f}초, 얼굴 {len(faces)}개)")
         return MediaInfo(filepath, 'video', duration, w, h, faces)
 
-    elif ext in ['.mp3', '.wav', '.ogg', '.m4a', '.flac']:
+    elif ext in ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac']:
+        print(f"🎵 오디오: {os.path.basename(filepath)}")
         return MediaInfo(filepath, 'audio')
 
     return None
@@ -183,6 +214,9 @@ def ease_in_out(t):
 
 def apply_camera_effect(clip, technique, face_info=None):
     duration = clip.duration
+    if duration <= 0:
+        return clip
+
     w, h = clip.size
 
     target_x = face_info['relative_center'][0] if face_info else 0.5
@@ -265,25 +299,48 @@ def apply_camera_effect(clip, technique, face_info=None):
     return clip
 
 # ============================================================
-# 9. 클립 크기 맞추기
+# 9. 클립 크기 맞추기 (검정 여백 추가 - letterbox/pillarbox)
 # ============================================================
-def fit_to_output(clip):
+def fit_to_output_with_padding(clip):
+    """미디어 비율을 유지하면서 출력 크기에 맞추고, 빈 공간은 검정색으로 채움"""
     tw, th = Config.OUTPUT_WIDTH, Config.OUTPUT_HEIGHT
     cw, ch = clip.size
+
     target_ratio = tw / th
     clip_ratio = cw / ch
 
+    if abs(clip_ratio - target_ratio) < 0.01:
+        # 비율이 거의 같으면 단순 리사이즈
+        return clip.resize((tw, th))
+
     if clip_ratio > target_ratio:
-        clip = clip.resize(height=th)
-        nw = int(clip_ratio * th)
-        x = (nw - tw) // 2
-        clip = clip.crop(x1=x, x2=x+tw, y1=0, y2=th)
+        # 원본이 더 넓음 (위아래 검정 여백 - letterbox)
+        new_width = tw
+        new_height = int(tw / clip_ratio)
+        resized_clip = clip.resize((new_width, new_height))
+        y_offset = (th - new_height) // 2
+
+        # 검정 배경 생성
+        background = ColorClip(size=(tw, th), color=(0, 0, 0)).set_duration(clip.duration)
+        final = CompositeVideoClip([
+            background,
+            resized_clip.set_position(("center", y_offset))
+        ])
     else:
-        clip = clip.resize(width=tw)
-        nh = int(tw / clip_ratio)
-        y = (nh - th) // 2
-        clip = clip.crop(x1=0, x2=tw, y1=y, y2=y+th)
-    return clip
+        # 원본이 더 좁음 (좌우 검정 여백 - pillarbox)
+        new_height = th
+        new_width = int(th * clip_ratio)
+        resized_clip = clip.resize((new_width, new_height))
+        x_offset = (tw - new_width) // 2
+
+        # 검정 배경 생성
+        background = ColorClip(size=(tw, th), color=(0, 0, 0)).set_duration(clip.duration)
+        final = CompositeVideoClip([
+            background,
+            resized_clip.set_position((x_offset, "center"))
+        ])
+
+    return final.set_duration(clip.duration)
 
 # ============================================================
 # 10. 자동 편집 결정
@@ -298,7 +355,6 @@ def create_edit_decisions(media_list, beat_info):
     while current_time < beat_info.total_duration and media_idx < len(media_list) * 3:
         media = media_list[media_idx % len(media_list)]
 
-        # 클립 길이 결정
         clip_dur = None
         for bt in beat_info.strong_beats:
             if bt > current_time + Config.MIN_CLIP_DURATION:
@@ -317,7 +373,6 @@ def create_edit_decisions(media_list, beat_info):
         if clip_dur < 0.5:
             break
 
-        # 카메라 기법 선택
         has_face = len(media.faces) > 0
         is_strong = any(abs(bt - current_time) < 0.3 for bt in beat_info.strong_beats)
 
@@ -329,7 +384,6 @@ def create_edit_decisions(media_list, beat_info):
         else:
             technique = random.choice([CameraTechnique.KEN_BURNS, CameraTechnique.PAN_LEFT, CameraTechnique.PAN_RIGHT, CameraTechnique.DOLLY_IN])
 
-        # 트랜지션 선택
         if len(decisions) == 0:
             trans = TransitionType.FADE
         elif is_strong:
@@ -348,7 +402,7 @@ def create_edit_decisions(media_list, beat_info):
             zoom_target
         ))
 
-        print(f"  [{len(decisions)}] {current_time:.1f}s-{current_time+clip_dur:.1f}s: {technique.value} | {os.path.basename(media.filepath)}")
+        print(f"  [{len(decisions):2d}] {current_time:5.1f}s ~ {current_time+clip_dur:5.1f}s | {technique.value:12s} | {os.path.basename(media.filepath)}")
 
         current_time += clip_dur - Config.TRANSITION_DURATION
         media_idx += 1
@@ -360,54 +414,61 @@ def create_edit_decisions(media_list, beat_info):
 # ============================================================
 def render_video(media_list, decisions, audio_path, output_path="output_video.mp4"):
     print("\n🎬 비디오 렌더링 시작...")
+    print(f"   출력 크기: {Config.OUTPUT_WIDTH}x{Config.OUTPUT_HEIGHT}")
 
     clips = []
     for i, dec in enumerate(decisions):
-        print(f"  클립 {i+1}/{len(decisions)} 처리 중...")
+        print(f"  클립 {i+1}/{len(decisions)} 처리 중...", end="\r")
         media = media_list[dec.media_index]
         clip_dur = dec.end_time - dec.start_time
 
-        # 클립 생성
-        if media.media_type == 'image':
-            clip = ImageClip(media.filepath).set_duration(clip_dur)
-        else:
-            clip = VideoFileClip(media.filepath)
-            if clip.duration > clip_dur:
-                start = (clip.duration - clip_dur) / 2
-                clip = clip.subclip(start, start + clip_dur)
-            elif clip.duration < clip_dur:
-                clip = clip.loop(duration=clip_dur)
+        try:
+            if media.media_type == 'image':
+                clip = ImageClip(media.filepath).set_duration(clip_dur)
+            else:
+                clip = VideoFileClip(media.filepath)
+                if clip.duration > clip_dur:
+                    start = (clip.duration - clip_dur) / 2
+                    clip = clip.subclip(start, start + clip_dur)
+                elif clip.duration < clip_dur:
+                    clip = clip.loop(duration=clip_dur)
 
-        # 크기 맞추기
-        clip = fit_to_output(clip)
+            # 크기 맞추기 (검정 여백 추가)
+            clip = fit_to_output_with_padding(clip)
 
-        # 카메라 효과
-        clip = apply_camera_effect(clip, dec.camera_technique, dec.zoom_target)
+            # 카메라 효과
+            clip = apply_camera_effect(clip, dec.camera_technique, dec.zoom_target)
 
-        # 트랜지션
-        if dec.transition_in == TransitionType.FADE:
-            clip = clip.fadein(0.5)
-        elif dec.transition_in == TransitionType.CROSSFADE and clips:
-            clip = clip.crossfadein(0.5)
-        elif dec.transition_in == TransitionType.FLASH:
-            clip = clip.fadein(0.2)
+            # 트랜지션
+            if dec.transition_in == TransitionType.FADE:
+                clip = clip.fadein(0.5)
+            elif dec.transition_in == TransitionType.CROSSFADE and clips:
+                clip = clip.crossfadein(0.5)
+            elif dec.transition_in == TransitionType.FLASH:
+                clip = clip.fadein(0.2)
 
-        clips.append(clip)
+            clips.append(clip)
+        except Exception as e:
+            print(f"\n  ⚠️ 클립 {i+1} 처리 중 오류: {e}")
+            continue
 
-    # 연결
+    if not clips:
+        print("❌ 처리된 클립이 없습니다!")
+        return None
+
+    print(f"\n  ✓ {len(clips)}개 클립 처리 완료")
     print("  클립 연결 중...")
+
     if len(clips) == 1:
         final = clips[0]
     else:
         final = concatenate_videoclips(clips, method="compose")
 
-    # 오디오 추가
     print("  오디오 추가 중...")
     audio = AudioFileClip(audio_path)
     final = final.set_audio(audio.subclip(0, min(audio.duration, final.duration)))
 
-    # 저장
-    print(f"  저장 중: {output_path}")
+    print(f"  파일 저장 중: {output_path}")
     final.write_videofile(
         output_path,
         fps=Config.OUTPUT_FPS,
@@ -422,45 +483,150 @@ def render_video(media_list, decisions, audio_path, output_path="output_video.mp
     final.close()
     audio.close()
     for c in clips:
-        c.close()
+        try:
+            c.close()
+        except:
+            pass
 
-    print(f"\n✅ 완료: {output_path}")
+    print(f"\n✅ 렌더링 완료: {output_path}")
     return output_path
 
 # ============================================================
-# 12. 메인 실행
+# 12. 파일 업로드 매니저
+# ============================================================
+class UploadManager:
+    def __init__(self):
+        self.uploaded_files = []
+        os.makedirs('uploads', exist_ok=True)
+        os.makedirs('output', exist_ok=True)
+
+    def upload_files(self):
+        """파일 업로드 (여러 번 반복 가능)"""
+        print("\n" + "="*60)
+        print("📁 파일 업로드")
+        print("="*60)
+        print("지원 형식:")
+        print("  🖼️ 이미지: jpg, png, webp, gif 등")
+        print("  🎬 비디오: mp4, mov, avi, mkv 등")
+        print("  🎵 오디오: mp3, wav, m4a, flac 등 (필수!)")
+        print()
+        print("💡 파일을 여러 번에 나눠서 업로드할 수 있습니다.")
+        print("   업로드가 끝나면 아래에서 '완료'를 선택하세요.")
+        print("="*60)
+
+        upload_count = 0
+
+        while True:
+            print(f"\n현재 업로드된 파일: {len(self.uploaded_files)}개")
+            print("-" * 40)
+            print("1. 파일 추가 업로드")
+            print("2. 업로드 완료 → 영상 생성 시작")
+            print("-" * 40)
+
+            try:
+                choice = input("선택 (1 또는 2): ").strip()
+            except:
+                choice = "1"
+
+            if choice == "2":
+                if len(self.uploaded_files) == 0:
+                    print("⚠️ 업로드된 파일이 없습니다. 파일을 먼저 업로드하세요.")
+                    continue
+
+                # 오디오 파일 확인
+                has_audio = any(
+                    os.path.splitext(f)[1].lower() in ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac']
+                    for f in self.uploaded_files
+                )
+                if not has_audio:
+                    print("⚠️ 음악 파일이 필요합니다! 오디오 파일을 업로드하세요.")
+                    continue
+
+                # 이미지 또는 비디오 확인
+                has_visual = any(
+                    os.path.splitext(f)[1].lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v']
+                    for f in self.uploaded_files
+                )
+                if not has_visual:
+                    print("⚠️ 이미지 또는 비디오 파일이 필요합니다!")
+                    continue
+
+                print("\n✅ 업로드 완료!")
+                break
+
+            else:
+                # 파일 업로드
+                print("\n📤 파일 선택 창이 열립니다...")
+                print("   (여러 파일을 한번에 선택할 수 있습니다)")
+
+                try:
+                    uploaded = files.upload()
+
+                    for filename, content in uploaded.items():
+                        filepath = os.path.join('uploads', filename)
+                        with open(filepath, 'wb') as f:
+                            f.write(content)
+                        self.uploaded_files.append(filepath)
+                        print(f"  ✓ {filename}")
+                        upload_count += 1
+
+                    print(f"\n📊 이번에 {len(uploaded)}개 파일 추가됨 (총 {len(self.uploaded_files)}개)")
+
+                except Exception as e:
+                    print(f"업로드 중 오류: {e}")
+                    print("다시 시도해주세요.")
+
+        return self.uploaded_files
+
+    def get_file_list(self):
+        """업로드된 파일 목록 반환"""
+        return self.uploaded_files
+
+# ============================================================
+# 13. 메인 실행
 # ============================================================
 def main():
-    print("\n" + "🎬"*25)
-    print("      AI 자동 비디오 편집기")
-    print("🎬"*25 + "\n")
+    print("\n" + "🎬"*30)
+    print("       AI 자동 비디오 편집기 v2.0")
+    print("🎬"*30 + "\n")
 
-    # 폴더 생성
-    os.makedirs('uploads', exist_ok=True)
-    os.makedirs('output', exist_ok=True)
+    # 1. 출력 형식 선택
+    print("="*60)
+    print("📐 출력 형식 선택")
+    print("="*60)
+    print("1. 가로형 (1920x1080) - YouTube, PC용")
+    print("2. 세로형 (1080x1920) - 인스타 릴스, 틱톡, 쇼츠용")
+    print("="*60)
 
-    # 파일 업로드
-    print("📁 파일을 업로드하세요!")
-    print("   - 이미지: jpg, png, webp 등")
-    print("   - 비디오: mp4, mov, avi 등")
-    print("   - 음악: mp3, wav, m4a 등 (필수!)\n")
+    while True:
+        try:
+            format_choice = input("선택 (1 또는 2): ").strip()
+        except:
+            format_choice = "1"
 
-    uploaded = files.upload()
+        if format_choice == "1":
+            Config.set_horizontal()
+            break
+        elif format_choice == "2":
+            Config.set_vertical()
+            break
+        else:
+            print("1 또는 2를 입력해주세요.")
 
-    # 파일 저장 및 분석
+    # 2. 파일 업로드
+    upload_manager = UploadManager()
+    uploaded_files = upload_manager.upload_files()
+
+    # 3. 미디어 분석
+    print("\n" + "="*60)
+    print("📊 미디어 분석")
+    print("="*60)
+
     media_list = []
     audio_path = None
     beat_info = None
 
-    print("\n" + "="*50)
-    print("📊 미디어 분석")
-    print("="*50)
-
-    for filename, content in uploaded.items():
-        filepath = os.path.join('uploads', filename)
-        with open(filepath, 'wb') as f:
-            f.write(content)
-
+    for filepath in uploaded_files:
         info = analyze_media(filepath)
         if info:
             if info.media_type == 'audio':
@@ -469,39 +635,50 @@ def main():
             else:
                 media_list.append(info)
 
-    if not audio_path:
-        print("❌ 오류: 음악 파일이 필요합니다!")
-        return
-    if not media_list:
-        print("❌ 오류: 이미지 또는 비디오 파일이 필요합니다!")
-        return
-
-    print("\n" + "="*50)
+    # 4. 분석 결과 출력
+    print("\n" + "="*60)
     print("📋 분석 결과")
-    print("="*50)
-    print(f"  미디어: {len(media_list)}개")
-    print(f"  음악 길이: {beat_info.total_duration:.1f}초")
-    print(f"  템포: {beat_info.tempo:.1f} BPM")
+    print("="*60)
 
-    # 편집 결정 생성
+    image_count = sum(1 for m in media_list if m.media_type == 'image')
+    video_count = sum(1 for m in media_list if m.media_type == 'video')
+
+    print(f"  🖼️ 이미지: {image_count}개")
+    print(f"  🎬 비디오: {video_count}개")
+    print(f"  🎵 음악 길이: {beat_info.total_duration:.1f}초")
+    print(f"  🎼 템포: {beat_info.tempo:.1f} BPM")
+    print(f"  📐 출력: {Config.OUTPUT_WIDTH}x{Config.OUTPUT_HEIGHT}")
+
+    # 5. 편집 결정 생성
     decisions = create_edit_decisions(media_list, beat_info)
 
-    # 렌더링
+    # 6. 렌더링
     output_path = os.path.join('output', 'auto_edited_video.mp4')
-    render_video(media_list, decisions, audio_path, output_path)
+    result = render_video(media_list, decisions, audio_path, output_path)
 
-    # 다운로드
-    print("\n" + "="*50)
+    if result is None:
+        print("❌ 비디오 생성에 실패했습니다.")
+        return
+
+    # 7. 다운로드
+    print("\n" + "="*60)
     print("📥 비디오 다운로드")
-    print("="*50)
+    print("="*60)
     files.download(output_path)
 
-    # 미리보기
-    from IPython.display import HTML
+    # 8. 미리보기
+    print("\n🎬 미리보기:")
+    from IPython.display import HTML, display
     from base64 import b64encode
-    mp4 = open(output_path, 'rb').read()
-    data_url = "data:video/mp4;base64," + b64encode(mp4).decode()
-    display(HTML(f'<video width="800" controls><source src="{data_url}" type="video/mp4"></video>'))
+
+    try:
+        mp4 = open(output_path, 'rb').read()
+        data_url = "data:video/mp4;base64," + b64encode(mp4).decode()
+        display(HTML(f'<video width="640" controls><source src="{data_url}" type="video/mp4"></video>'))
+    except Exception as e:
+        print(f"미리보기 로드 실패: {e}")
+        print("다운로드된 파일을 확인해주세요.")
 
 # 실행!
-main()
+if __name__ == "__main__":
+    main()
